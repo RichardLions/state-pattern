@@ -146,6 +146,8 @@
     <None Include="vcpkg.json" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="finitestatemachine.h" />
+    <ClInclude Include="simpleeventqueuesingleton.h" />
     <ClInclude Include="statepatternexamples.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,123 +1,159 @@
 #pragma once
 
 #include <catch2/catch_test_macros.hpp>
-#include <functional>
-#include <memory>
+#include <catch2/benchmark/catch_benchmark.hpp>
 
-#include <iostream>
+#include "finitestatemachine.h"
+#include "simpleeventqueuesingleton.h"
 
-class State;
-
-template<typename T>
-using StateGuard = std::function<bool(const T&)>;
-
-using StateCreator = std::function<std::unique_ptr<State>()>;
-
-template<typename T>
-using StateTransition = std::pair<StateGuard<T>, StateCreator>;
-
-template<typename T>
-using StateTransitions = std::vector<StateTransition<T>>;
-
-class State
+class Light
 {
 public:
-    virtual ~State() = default;
-    virtual void OnEnter() = 0;
-    virtual void Update() = 0;
-    virtual void OnExit() = 0;
-    virtual std::unique_ptr<State> CheckGuards() const = 0;
+    void TurnOn() { m_On = true; }
+    void TurnOff() { m_On = false; }
+    bool IsOn() const { return m_On; }
+    bool IsOff() const { return !m_On; }
+private:
+    bool m_On{false};
 };
 
-template<typename T>
-class StateGuards : public State
+struct LightSwitchOnEvent {};
+struct LightSwitchOffEvent {};
+
+using LightSwitchOnEventQueue = SimpleEventQueueSingleton<LightSwitchOnEvent>;
+using LightSwitchOffEventQueue = SimpleEventQueueSingleton<LightSwitchOffEvent>;
+
+class LightOffState final : public StateModel<LightOffState, Light>
 {
 public:
-    [[nodiscard]] std::unique_ptr<State> CheckGuards() const final
+    ~LightOffState()
     {
-        for(auto& [guard, creator] : ms_Transitions)
-        {
-            if(guard(static_cast<const T&>(*this)))
+        LightSwitchOnEventQueue::GetInstance().UnregisterListener(m_ListenerHandle);
+    }
+
+    void OnEnter(Light& light) override
+    {
+        m_ListenerHandle = LightSwitchOnEventQueue::GetInstance().RegisterListener(
+            [&light](const LightSwitchOnEventQueue::Event&)
             {
-                return creator();
-            }
-        }
-
-        return nullptr;
+                light.TurnOn();
+            });
     }
 
-    template<typename ToState>
-    static void AddStateTransition(StateGuard<T>&& guard)
-    {
-        ms_Transitions.emplace_back(
-            std::move(guard),
-            []{ return std::make_unique<ToState>(); });
-    }
-
+    void Update(Light&) override { }
+    void OnExit(Light&) override { }
 private:
-    static StateTransitions<T> ms_Transitions;
+    LightSwitchOnEventQueue::ListenerHandle m_ListenerHandle{LightSwitchOnEventQueue::ListenerHandle::Invalid};
 };
 
-template<typename T>
-StateTransitions<T> StateGuards<T>::ms_Transitions{};
-
-class FiniteStateMachine
+class LightOnState final : public StateModel<LightOnState, Light>
 {
 public:
-    explicit FiniteStateMachine(std::unique_ptr<State>&& state)
-        : m_State{std::move(state)}
+    ~LightOnState()
     {
-        m_State->OnEnter();
+        LightSwitchOffEventQueue::GetInstance().UnregisterListener(m_ListenerHandle);
     }
 
-    void Update()
+    void OnEnter(Light& light) override
     {
-        m_State->Update();
-        if(std::unique_ptr<State> state{m_State->CheckGuards()})
-        {
-            m_State->OnExit();
-            m_State = std::move(state);
-            m_State->OnEnter();
-        }
+        m_ListenerHandle = LightSwitchOffEventQueue::GetInstance().RegisterListener(
+            [&light](const LightSwitchOffEventQueue::Event&)
+            {
+                light.TurnOff();
+            });
     }
 
+    void Update(Light&) override { }
+    void OnExit(Light&) override { }
 private:
-    std::unique_ptr<State> m_State{};
-};
-
-class StateA final : public StateGuards<StateA>
-{
-public:
-    void OnEnter() override { std::cout << "StateA::OnEnter\n"; }
-    void Update() override { std::cout << "StateA::Update\n"; }
-    void OnExit() override { std::cout << "StateA::OnExit\n"; }
-};
-
-class StateB final : public StateGuards<StateB>
-{
-public:
-    void OnEnter() override { std::cout << "StateB::OnEnter\n"; }
-    void Update() override { std::cout << "StateB::Update\n"; }
-    void OnExit() override { std::cout << "StateB::OnExit\n"; }
-};
-
-class StateC final : public StateGuards<StateC>
-{
-public:
-    void OnEnter() override { std::cout << "StateC::OnEnter\n"; }
-    void Update() override { std::cout << "StateC::Update\n"; }
-    void OnExit() override { std::cout << "StateC::OnExit\n"; }
+    LightSwitchOffEventQueue::ListenerHandle m_ListenerHandle{LightSwitchOffEventQueue::ListenerHandle::Invalid};
 };
 
 TEST_CASE("Finite State Machine - Unit Tests")
 {
-    StateA::AddStateTransition<StateB>([](const StateA&){ return true; });
-    StateB::AddStateTransition<StateC>([](const StateB&){ return true; });
-    StateC::AddStateTransition<StateA>([](const StateC&){ return true; });
+    LightOffState::AddTransitionGuard<LightOnState>(
+        [](const LightOffState&, const Light& light)
+        {
+            return light.IsOn();
+        });
 
-    FiniteStateMachine stateMachine{std::make_unique<StateA>()};
-    for(;;)
+    LightOnState::AddTransitionGuard<LightOffState>(
+        [](const LightOnState&, const Light& light)
+        {
+            return light.IsOff();
+        });
+
+    std::shared_ptr<Light> light{std::make_shared<Light>()};
+    FiniteStateMachine<Light> stateMachine{std::make_unique<LightOffState>(), light};
+    REQUIRE(light->IsOff());
+
+    // Event handled
+    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+    LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+    REQUIRE(light->IsOn());
+
+    // Event unhandled
+    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+    LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+    REQUIRE(light->IsOn());
+
+    // State transition LightOffState -> LightOnState
+    stateMachine.Update();
+    REQUIRE(light->IsOn());
+
+    // Event handled
+    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+    LightSwitchOffEventQueue::GetInstance().DispatchEvents();
+    REQUIRE(light->IsOff());
+
+    // State transition LightOnState -> LightOffState
+    stateMachine.Update();
+    REQUIRE(light->IsOff());
+
+    // Event handled
+    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+    LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+    REQUIRE(light->IsOn());
+
+    LightOffState::ClearStateTransitions();
+    LightOnState::ClearStateTransitions();
+}
+
+TEST_CASE("Finite State Machine - Benchmarks")
+{
+    BENCHMARK("Benchmark")
     {
-        stateMachine.Update();
-    }
+        constexpr uint32_t updateCount{100'000};
+
+        LightOffState::AddTransitionGuard<LightOnState>(
+            [](const LightOffState&, const Light& light)
+            {
+                return light.IsOn();
+            });
+
+        LightOnState::AddTransitionGuard<LightOffState>(
+            [](const LightOnState&, const Light& light)
+            {
+                return light.IsOff();
+            });
+
+        std::shared_ptr<Light> light{std::make_shared<Light>()};
+        FiniteStateMachine<Light> stateMachine{std::make_unique<LightOffState>(), light};
+
+        for(uint32_t i{0}; i != updateCount; ++i)
+        {
+            LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+            LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+
+            stateMachine.Update();
+
+            LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+            LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+
+            stateMachine.Update();
+        }
+
+        LightOffState::ClearStateTransitions();
+        LightOnState::ClearStateTransitions();
+    };
 }

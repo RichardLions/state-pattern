@@ -33,5 +33,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="statepatternexamples.h" />
+    <ClInclude Include="simpleeventqueuesingleton.h" />
+    <ClInclude Include="finitestatemachine.h" />
   </ItemGroup>
 </Project>
