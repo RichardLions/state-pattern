@@ -17,8 +17,25 @@ private:
     bool m_On{false};
 };
 
-struct LightSwitchOnEvent {};
-struct LightSwitchOffEvent {};
+struct LightSwitchOnEvent
+{
+    LightSwitchOnEvent(std::shared_ptr<Light> light)
+        : m_Light{std::move(light)}
+    {
+    }
+
+    std::shared_ptr<Light> m_Light{};
+};
+
+struct LightSwitchOffEvent
+{
+    LightSwitchOffEvent(std::shared_ptr<Light> light)
+        : m_Light{std::move(light)}
+    {
+    }
+
+    std::shared_ptr<Light> m_Light{};
+};
 
 using LightSwitchOnEventQueue = SimpleEventQueueSingleton<LightSwitchOnEvent>;
 using LightSwitchOffEventQueue = SimpleEventQueueSingleton<LightSwitchOffEvent>;
@@ -34,9 +51,10 @@ public:
     void OnEnter(Light& light) override
     {
         m_ListenerHandle = LightSwitchOnEventQueue::GetInstance().RegisterListener(
-            [&light](const LightSwitchOnEventQueue::Event&)
+            [&light](const LightSwitchOnEventQueue::Event& event)
             {
-                light.TurnOn();
+                if(&light == event.m_Light.get())
+                    light.TurnOn();
             });
     }
 
@@ -57,9 +75,10 @@ public:
     void OnEnter(Light& light) override
     {
         m_ListenerHandle = LightSwitchOffEventQueue::GetInstance().RegisterListener(
-            [&light](const LightSwitchOffEventQueue::Event&)
+            [&light](const LightSwitchOffEventQueue::Event& event)
             {
-                light.TurnOff();
+                if(&light == event.m_Light.get())
+                    light.TurnOff();
             });
     }
 
@@ -88,12 +107,12 @@ TEST_CASE("Finite State Machine - Unit Tests")
     REQUIRE(light->IsOff());
 
     // Event handled
-    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{light});
     LightSwitchOnEventQueue::GetInstance().DispatchEvents();
     REQUIRE(light->IsOn());
 
     // Event unhandled
-    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{light});
     LightSwitchOnEventQueue::GetInstance().DispatchEvents();
     REQUIRE(light->IsOn());
 
@@ -102,7 +121,7 @@ TEST_CASE("Finite State Machine - Unit Tests")
     REQUIRE(light->IsOn());
 
     // Event handled
-    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+    LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{light});
     LightSwitchOffEventQueue::GetInstance().DispatchEvents();
     REQUIRE(light->IsOff());
 
@@ -110,8 +129,13 @@ TEST_CASE("Finite State Machine - Unit Tests")
     stateMachine.Update();
     REQUIRE(light->IsOff());
 
+    // Event ignored, different light
+    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{std::make_shared<Light>()});
+    LightSwitchOnEventQueue::GetInstance().DispatchEvents();
+    REQUIRE(light->IsOff());
+
     // Event handled
-    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+    LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{light});
     LightSwitchOnEventQueue::GetInstance().DispatchEvents();
     REQUIRE(light->IsOn());
 
@@ -142,12 +166,12 @@ TEST_CASE("Finite State Machine - Benchmarks")
 
         for(uint32_t i{0}; i != updateCount; ++i)
         {
-            LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{});
+            LightSwitchOnEventQueue::GetInstance().QueueEvent(LightSwitchOnEvent{light});
             LightSwitchOnEventQueue::GetInstance().DispatchEvents();
 
             stateMachine.Update();
 
-            LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{});
+            LightSwitchOffEventQueue::GetInstance().QueueEvent(LightSwitchOffEvent{light});
             LightSwitchOnEventQueue::GetInstance().DispatchEvents();
 
             stateMachine.Update();
