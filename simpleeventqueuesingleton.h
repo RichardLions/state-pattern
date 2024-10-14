@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <algorithm>
 
 template<typename EventType>
 class SimpleEventQueueSingleton
@@ -11,6 +12,18 @@ public:
     using Instance = SimpleEventQueueSingleton<Event>;
     enum class ListenerHandle : size_t { Invalid = -1 };
 
+    struct ListenerRegistration
+    {
+        explicit ListenerRegistration(Listener&& listener, const ListenerHandle handle)
+            : m_Listener{std::move(listener)}
+            , m_Handle{handle}
+        {
+        }
+
+        Listener m_Listener{};
+        ListenerHandle m_Handle{ListenerHandle::Invalid};
+    };
+
     static Instance& GetInstance()
     {
         static Instance instance{};
@@ -19,16 +32,19 @@ public:
 
     [[nodiscard]] ListenerHandle RegisterListener(Listener&& listener)
     {
-        m_Listeners.push_back(std::move(listener));
-        return static_cast<ListenerHandle>(m_Listeners.size() - 1);
+        const ListenerHandle handle{m_Listeners.size()};
+        m_Listeners.emplace_back(std::move(listener), handle);
+        return handle;
     }
 
     void UnregisterListener(const ListenerHandle handle)
     {
-        if(handle <= ListenerHandle::Invalid)
-            return;
-
-        m_Listeners.erase(std::begin(m_Listeners) + static_cast<size_t>(handle));
+        std::erase_if(
+            m_Listeners,
+            [handle](const ListenerRegistration& listenerRegistration)
+            {
+                return listenerRegistration.m_Handle == handle;
+            });
     }
 
     void QueueEvent(Event&& event)
@@ -39,11 +55,11 @@ public:
     /// Does not support queueing events or adding/removing listeners during dispatch.
     void DispatchEvents()
     {
-        for(const Listener& listener : m_Listeners)
+        for(const ListenerRegistration& listenerRegistration : m_Listeners)
         {
             for(const Event& event : m_Events)
             {
-                listener(event);
+                listenerRegistration.m_Listener(event);
             }
         }
 
@@ -54,6 +70,6 @@ private:
     SimpleEventQueueSingleton(const Instance&) = delete;
     Instance& operator=(const Instance&) = delete;
 
-    std::vector<Listener> m_Listeners{};
+    std::vector<ListenerRegistration> m_Listeners{};
     std::vector<Event> m_Events{};
 };
