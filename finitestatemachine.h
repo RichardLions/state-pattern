@@ -3,6 +3,9 @@
 #include <functional>
 #include <memory>
 
+namespace fsm
+{
+
 template<typename TOwner>
 class StateConcept;
 
@@ -90,3 +93,5 @@ private:
     std::unique_ptr<StateConcept<TOwner>> m_State{};
     std::shared_ptr<TOwner> m_Owner{};
 };
+
+}
